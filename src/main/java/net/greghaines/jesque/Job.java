@@ -29,6 +29,7 @@ import com.fasterxml.jackson.annotation.JsonAnySetter;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.gson.annotations.SerializedName;
 
 /**
  * A simple class to describe a job to be run by a worker.
@@ -39,10 +40,13 @@ public class Job implements Serializable {
     
     private static final long serialVersionUID = -1523425239512691383L;
 
+    @SerializedName("class") 
     private String className;
+    @SerializedName("args") 
     private Object[] args;
+    @SerializedName("vars") 
     private Map<String,Object> vars;
-    private Map<String,Object> unknownFields = new HashMap<String,Object>();
+    private transient Map<String,Object> unknownFields = new HashMap<String,Object>();
 
     /**
      * No-argument constructor.
