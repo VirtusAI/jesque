@@ -47,6 +47,7 @@ public class Job implements Serializable {
     @SerializedName("vars") 
     private Map<String,Object> vars;
     private transient Map<String,Object> unknownFields = new HashMap<String,Object>();
+	private transient Double runAt; // only set if this job belongs to a delayed queue
 
     /**
      * No-argument constructor.
@@ -196,6 +197,16 @@ public class Job implements Serializable {
     @SuppressWarnings("unchecked")
     public void setVars(final Map<String, ? extends Object> vars) {
         this.vars = (Map<String, Object>)vars;
+    }
+
+    @JsonIgnore
+    public Double getRunAt() {
+        return runAt;
+    }
+
+    @JsonIgnore
+    public void setRunAt(Double runAt) {
+        this.runAt = runAt;
     }
 
     /**

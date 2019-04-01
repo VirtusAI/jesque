@@ -21,9 +21,9 @@ import static net.greghaines.jesque.utils.ResqueConstants.QUEUES;
 import static net.greghaines.jesque.utils.ResqueConstants.STAT;
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 
 import net.greghaines.jesque.Config;
 import net.greghaines.jesque.Job;
@@ -35,7 +35,8 @@ import net.greghaines.jesque.utils.JesqueUtils;
 import net.greghaines.jesque.utils.PoolUtils;
 import net.greghaines.jesque.utils.PoolUtils.PoolWork;
 import redis.clients.jedis.Jedis;
-import redis.clients.util.Pool;
+import redis.clients.jedis.Tuple;
+import redis.clients.jedis.util.Pool;
 
 /**
  * QueueInfoDAORedisImpl gets queue information from Redis.
@@ -137,6 +138,10 @@ public class QueueInfoDAORedisImpl implements QueueInfoDAO {
                     final QueueInfo queueInfo = new QueueInfo();
                     queueInfo.setName(queueName);
                     queueInfo.setSize(size(jedis, queueName));
+                    queueInfo.setDelayed(delayed(jedis, queueName));
+                    if (queueInfo.isDelayed()) {
+                        queueInfo.setPending(pending(jedis, queueName));
+                    }
                     queueInfos.add(queueInfo);
                 }
                 Collections.sort(queueInfos);
@@ -159,15 +164,20 @@ public class QueueInfoDAORedisImpl implements QueueInfoDAO {
                 final QueueInfo queueInfo = new QueueInfo();
                 queueInfo.setName(name);
                 queueInfo.setSize(size(jedis, name));
-                final Collection<String> payloads = paylods(jedis, name, jobOffset, jobCount);
-                final List<Job> jobs = new ArrayList<Job>(payloads.size());
-                for (final String payload : payloads) {
-                    jobs.add(ObjectMapperFactory.get().readValue(payload, Job.class));
+                queueInfo.setDelayed(delayed(jedis, name));
+                if (queueInfo.isDelayed()) {
+                    queueInfo.setPending(pending(jedis, name));
                 }
+                final List<Job> jobs = getJobs(jedis, name, jobOffset, jobCount);
                 queueInfo.setJobs(jobs);
                 return queueInfo;
             }
         });
+    }
+
+    private boolean delayed(Jedis jedis, String queueName) {
+        final String key = key(QUEUE, queueName);
+        return JedisUtils.isDelayedQueue(jedis, key);
     }
 
     /**
@@ -217,8 +227,13 @@ public class QueueInfoDAORedisImpl implements QueueInfoDAO {
         return size;
     }
 
+    private long pending(final Jedis jedis, final String queueName) {
+        final String key = key(QUEUE, queueName);
+        return jedis.zcount(key, 0, System.currentTimeMillis());
+    }
+
     /**
-     * Get list of payload from a queue.
+     * Get list of Jobs from a queue.
      * 
      * @param jedis
      * @param queueName
@@ -226,14 +241,23 @@ public class QueueInfoDAORedisImpl implements QueueInfoDAO {
      * @param jobCount
      * @return
      */
-    private Collection<String> paylods(final Jedis jedis, final String queueName, final long jobOffset, final long jobCount) {
+    private List<Job> getJobs(final Jedis jedis, final String queueName, final long jobOffset, final long jobCount) throws Exception {
         final String key = key(QUEUE, queueName);
-        final Collection<String> payloads;
-        if (JedisUtils.isDelayedQueue(jedis, key)) { // If delayed queue, use ZRANGE
-            payloads = jedis.zrange(key, jobOffset, jobOffset + jobCount - 1);
+        final List<Job> jobs = new ArrayList<>();
+        if (JedisUtils.isDelayedQueue(jedis, key)) { // If delayed queue, use ZRANGEWITHSCORES
+            final Set<Tuple> elements = jedis.zrangeWithScores(key, jobOffset, jobOffset + jobCount - 1);
+            for (final Tuple elementWithScore : elements) {
+                final Job job = ObjectMapperFactory.get().readValue(elementWithScore.getElement(), Job.class);
+                job.setRunAt(elementWithScore.getScore());
+                jobs.add(job);
+            }
         } else { // Else, use LRANGE
-            payloads = jedis.lrange(key, jobOffset, jobOffset + jobCount - 1);
+            final List<String> elements = jedis.lrange(key, jobOffset, jobOffset + jobCount - 1);
+            for (final String element : elements) {
+                jobs.add(ObjectMapperFactory.get().readValue(element, Job.class));
+            }
         }
-        return payloads;
+        return jobs;
     }
+
 }

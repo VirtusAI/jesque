@@ -15,11 +15,11 @@
  */
 package net.greghaines.jesque.meta;
 
-import java.io.Serializable;
-import java.util.List;
-
 import net.greghaines.jesque.Job;
 import net.greghaines.jesque.utils.JesqueUtils;
+
+import java.io.Serializable;
+import java.util.List;
 
 /**
  * Information about the current state of a queue.
@@ -33,6 +33,8 @@ public class QueueInfo implements Comparable<QueueInfo>, Serializable {
     private String name;
     private Long size;
     private List<Job> jobs;
+    private Boolean delayed;
+    private Long pending; // only set if this queue is delayed
 
     /**
      * @return the name of the queue
@@ -77,6 +79,34 @@ public class QueueInfo implements Comparable<QueueInfo>, Serializable {
     }
 
     /**
+     * @return whether this queue is a delayed queue
+     */
+    public Boolean isDelayed() {
+        return this.delayed;
+    }
+
+    /**
+     * @param delayed whether this queue is a delayed queue
+     */
+    public void setDelayed(final Boolean delayed) {
+        this.delayed = delayed;
+    }
+
+    /**
+     * @return the number of pending jobs in the queue
+     */
+    public Long getPending() {
+        return this.pending;
+    }
+
+    /**
+     * @param pending the number of pending jobs in the queue
+     */
+    public void setPending(final Long pending) {
+        this.pending = pending;
+    }
+
+    /**
      * {@inheritDoc}
      */
     @Override
@@ -94,6 +124,8 @@ public class QueueInfo implements Comparable<QueueInfo>, Serializable {
         result = prime * result + ((this.jobs == null) ? 0 : this.jobs.hashCode());
         result = prime * result + ((this.name == null) ? 0 : this.name.hashCode());
         result = prime * result + ((this.size == null) ? 0 : this.size.hashCode());
+        result = prime * result + ((this.delayed == null) ? 0 : this.delayed.hashCode());
+        result = prime * result + ((this.pending == null) ? 0 : this.pending.hashCode());
         return result;
     }
 
@@ -109,7 +141,9 @@ public class QueueInfo implements Comparable<QueueInfo>, Serializable {
             final QueueInfo other = (QueueInfo) obj;
             equal = (JesqueUtils.nullSafeEquals(this.jobs, other.jobs)
                     && JesqueUtils.nullSafeEquals(this.name, other.name)
-                    && JesqueUtils.nullSafeEquals(this.size, other.size));
+                    && JesqueUtils.nullSafeEquals(this.size, other.size)
+                    && JesqueUtils.nullSafeEquals(this.delayed, other.delayed)
+                    && JesqueUtils.nullSafeEquals(this.pending, other.pending));
         }
         return equal;
     }

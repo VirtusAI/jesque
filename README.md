@@ -23,7 +23,7 @@ Or, to use it in your Maven project, add it as a dependency:
 <dependency>
   <groupId>net.greghaines</groupId>
   <artifactId>jesque</artifactId>
-  <version>2.1.2</version>
+  <version>2.1.3</version>
 </dependency>
 ```
 
@@ -47,9 +47,15 @@ final Worker worker = new WorkerImpl(config,
 final Thread workerThread = new Thread(worker);
 workerThread.start();
 
+// Enqueue more jobs, etc.
+
+// Shutdown the worker when finished
 worker.end(true);
 try { workerThread.join(); } catch (Exception e){ e.printStackTrace(); }
 ```
+
+If enqueueing multiple jobs at the same time, there is `client.batchEnqueue(String queue, List<Job> jobs)` which does it
+in an optimized way.
 
 ### Delayed jobs
 Delayed jobs can be executed at sometime in the future.
@@ -61,7 +67,7 @@ client.delayedEnqueue("fooDelay", job, future);
 ```
 
 ### Recurring Jobs
-Recurring jobs can start at a specific time and exeucte at specified intervals. 
+Recurring jobs can start at a specific time and execute at specified intervals. 
 ```java
 final long delay = 10; // in seconds
 final long future = System.currentTimeMillis() + (delay * 1000); // timestamp
@@ -176,7 +182,7 @@ Boom! Ready to go!
 
 ## License
 
-Copyright 2015 Greg Haines
+Copyright 2019 Greg Haines
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

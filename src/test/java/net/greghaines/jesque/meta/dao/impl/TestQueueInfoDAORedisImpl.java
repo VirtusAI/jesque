@@ -35,7 +35,8 @@ import org.junit.Test;
 import com.fasterxml.jackson.core.JsonProcessingException;
 
 import redis.clients.jedis.Jedis;
-import redis.clients.util.Pool;
+import redis.clients.jedis.Tuple;
+import redis.clients.jedis.util.Pool;
 
 public class TestQueueInfoDAORedisImpl {
     
@@ -164,9 +165,10 @@ public class TestQueueInfoDAORedisImpl {
             oneOf(jedis).smembers(QUEUES_KEY); will(returnValue(queueCountMap.keySet()));
             for (final Entry<String,String> e : queueTypeMap.entrySet()) {
                 final String queueKey = "resque:queue:" + e.getKey();
-                oneOf(jedis).type(queueKey); will(returnValue(e.getValue()));
+                exactly(2).of(jedis).type(queueKey); will(returnValue(e.getValue()));
                 if (KeyType.ZSET.toString().equals(e.getValue())) {
                     oneOf(jedis).zcard(queueKey); will(returnValue(queueCountMap.get(e.getKey())));
+                    oneOf(jedis).zcount(with(equal(queueKey)), with(equal(0.0)), with(any(Double.class))); will(returnValue(1L));
                 } else {
                     oneOf(jedis).llen(queueKey); will(returnValue(queueCountMap.get(e.getKey())));
                 }
@@ -194,7 +196,7 @@ public class TestQueueInfoDAORedisImpl {
         payloads.add(ObjectMapperFactory.get().writeValueAsString(new Job("bar")));
         this.mockCtx.checking(new Expectations(){{
             oneOf(pool).getResource(); will(returnValue(jedis));
-            exactly(2).of(jedis).type(queueKey); will(returnValue(KeyType.LIST.toString()));
+            exactly(3).of(jedis).type(queueKey); will(returnValue(KeyType.LIST.toString()));
             oneOf(jedis).llen(queueKey); will(returnValue(size));
             oneOf(jedis).lrange(queueKey, jobOffset, jobOffset + jobCount - 1); will(returnValue(payloads));
             oneOf(jedis).close();
@@ -215,14 +217,15 @@ public class TestQueueInfoDAORedisImpl {
         final long jobOffset = 1;
         final long jobCount = 2;
         final long size = 4;
-        final Collection<String> payloads = new HashSet<String>();
-        payloads.add(ObjectMapperFactory.get().writeValueAsString(new Job("foo")));
-        payloads.add(ObjectMapperFactory.get().writeValueAsString(new Job("bar")));
+        final Set<Tuple> payloads = new HashSet<>();
+        payloads.add(new Tuple(ObjectMapperFactory.get().writeValueAsString(new Job("foo")), 1d));
+        payloads.add(new Tuple(ObjectMapperFactory.get().writeValueAsString(new Job("bar")), 1d));
         this.mockCtx.checking(new Expectations(){{
             oneOf(pool).getResource(); will(returnValue(jedis));
-            exactly(2).of(jedis).type(queueKey); will(returnValue(KeyType.ZSET.toString()));
+            exactly(3).of(jedis).type(queueKey); will(returnValue(KeyType.ZSET.toString()));
             oneOf(jedis).zcard(queueKey); will(returnValue(size));
-            oneOf(jedis).zrange(queueKey, jobOffset, jobOffset + jobCount - 1); will(returnValue(payloads));
+            oneOf(jedis).zcount(with(equal(queueKey)), with(equal(0.0)), with(any(Double.class))); will(returnValue(jobCount));
+            oneOf(jedis).zrangeWithScores(queueKey, jobOffset, jobOffset + jobCount - 1); will(returnValue(payloads));
             oneOf(jedis).close();
         }});
         final QueueInfo queueInfo = this.qInfoDAO.getQueueInfo(name, jobOffset, jobCount);

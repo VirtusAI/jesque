@@ -51,6 +51,7 @@ import net.greghaines.jesque.utils.JesqueUtils;
 import net.greghaines.jesque.utils.ScriptUtils;
 import net.greghaines.jesque.utils.VersionUtils;
 import redis.clients.jedis.Jedis;
+import redis.clients.jedis.Transaction;
 import redis.clients.jedis.exceptions.JedisException;
 
 /**
@@ -463,7 +464,7 @@ public class WorkerImpl implements Worker {
                 }
             } catch (JsonParseException | JsonMappingException e) {
                 // If the job JSON is not deserializable, we never want to submit it again...
-                removeInFlight(curQueue);
+                removeInFlight(curQueue, true);
                 recoverFromException(curQueue, e);
             } catch (Exception e) {
                 recoverFromException(curQueue, e);
@@ -504,14 +505,16 @@ public class WorkerImpl implements Worker {
      */
     protected String pop(final String curQueue) {
         final String key = key(QUEUE, curQueue);
+        final String now = Long.toString(System.currentTimeMillis());
+        final String inflightKey = key(INFLIGHT, this.name, curQueue);
         switch (nextQueueStrategy) {
-        case DRAIN_WHILE_MESSAGES_EXISTS:
-            return (String) this.jedis.evalsha(this.popScriptHash.get(), 3, key, key(INFLIGHT, this.name, curQueue),
-                    JesqueUtils.createRecurringHashKey(key), Long.toString(System.currentTimeMillis()));
-        case RESET_TO_HIGHEST_PRIORITY:
-            return (String) this.jedis.evalsha(this.multiPriorityQueuesScriptHash.get(), 1, curQueue);
-        default:
-            throw new RuntimeException("Unimplemented 'nextQueueStrategy'");
+            case DRAIN_WHILE_MESSAGES_EXISTS:
+                return (String) this.jedis.evalsha(this.popScriptHash.get(), 3, key, inflightKey,
+                        JesqueUtils.createRecurringHashKey(key), now);
+            case RESET_TO_HIGHEST_PRIORITY:
+                return (String) this.jedis.evalsha(this.multiPriorityQueuesScriptHash.get(), 3, curQueue, inflightKey, namespace, now);
+            default:
+                throw new RuntimeException("Unimplemented 'nextQueueStrategy'");
         }
     }
 
@@ -536,7 +539,7 @@ public class WorkerImpl implements Worker {
                 try {
                     loadRedisScripts();
                 } catch (IOException e) {
-                    LOG.error("Failed to load redis scripts", e);
+                    LOG.error("Failed to reload Lua scripts after reconnect", e);
                 }
             }
             break;
@@ -591,6 +594,7 @@ public class WorkerImpl implements Worker {
      * @param curQueue the queue the payload came from
      */
     protected void process(final Job job, final String curQueue) {
+        boolean success = false;
         try {
             this.processingJob.set(true);
             if (threadNameChangingEnabled) {
@@ -601,17 +605,18 @@ public class WorkerImpl implements Worker {
             final Object instance = this.jobFactory.materializeJob(job);
             final Object result = execute(job, curQueue, instance);
             success(job, instance, result, curQueue);
+            success = true;
         } catch (Throwable thrwbl) {
             failure(thrwbl, job, curQueue);
         } finally {
-            removeInFlight(curQueue);
+            removeInFlight(curQueue, success);
             this.jedis.del(key(WORKER, this.name));
             this.processingJob.set(false);
         }
     }
 
-    private void removeInFlight(final String curQueue) {
-        if (SHUTDOWN_IMMEDIATE.equals(this.state.get())) {
+    private void removeInFlight(final String curQueue, boolean skipRequeue) {
+        if (SHUTDOWN_IMMEDIATE.equals(this.state.get()) && !skipRequeue) {
             lpoplpush(key(INFLIGHT, this.name, curQueue), key(QUEUE, curQueue));
         } else {
             this.jedis.lpop(key(INFLIGHT, this.name, curQueue));
@@ -679,9 +684,23 @@ public class WorkerImpl implements Worker {
         try {
             this.jedis.incr(key(STAT, FAILED));
             this.jedis.incr(key(STAT, FAILED, this.name));
-            final String failQueueKey = this.failQueueStrategyRef.get().getFailQueueKey(thrwbl, job, curQueue);
+            final FailQueueStrategy strategy = this.failQueueStrategyRef.get();
+            final String failQueueKey = strategy.getFailQueueKey(thrwbl, job, curQueue);
             if (failQueueKey != null) {
-                this.jedis.rpush(failQueueKey, failMsg(thrwbl, curQueue, job));
+                final int failQueueMaxItems = strategy.getFailQueueMaxItems(curQueue);
+                if (failQueueMaxItems > 0) {
+                    Long currentItems = this.jedis.llen(failQueueKey);
+                    if (currentItems >= failQueueMaxItems) {
+                        Transaction tx = this.jedis.multi();
+                        tx.ltrim(failQueueKey, 1, -1);
+                        tx.rpush(failQueueKey, failMsg(thrwbl, curQueue, job));
+                        tx.exec();
+                    } else {
+                        this.jedis.rpush(failQueueKey, failMsg(thrwbl, curQueue, job));
+                    }
+                } else {
+                    this.jedis.rpush(failQueueKey, failMsg(thrwbl, curQueue, job));
+                }
             }
         } catch (JedisException je) {
             LOG.warn("Error updating failure stats for throwable=" + thrwbl + " job=" + job, je);
